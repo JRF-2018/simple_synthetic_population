@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-__version__ = '0.0.1' # Time-stamp: <2024-09-16T06:07:46Z>
+__version__ = '0.0.2' # Time-stamp: <2024-10-13T22:21:45Z>
 ## Language: Japanese/UTF-8
 
 import argparse
@@ -19,6 +19,12 @@ ARGS.swap_hack = True   # True: 近傍を求めるとき親と子の年齢をチ
                         # False: 近傍を求めるとき乱数に頼る。
 ARGS.reproduct_hack = False # True: 初期生成時に子や親の年齢書き換えを許す。
                             # False: 許さない。
+ARGS.family_cond_hack = True # True: 初期に家族条件を強制。
+                             # False: 強制しない。
+ARGS.check_12 = True    # True: 子のいる世帯主は12歳以上にする。
+                        # False: しない。
+ARGS.check_95 = True    # True: 親のいる世帯主は95歳未満にする。
+                        # False: しない。
 
 
 ## test_age_diff.py の結果
@@ -363,9 +369,28 @@ def initial_step (population):
 
         f = Family()
         f.id = len(families)
-        p = age_people[sex][age].pop()
+        p = age_people[sex][age].pop(0)
         f.code = code
         f.num = num
+
+        if ARGS.check_12 and code in [1, 2, 3, 6, 7, 9, 11] and p.age < 12:
+            k = len(age_people[sex][age]) + 1
+            while p.age < 12 and k > 0:
+                age_people[sex][age].append(p)
+                p = age_people[sex][age].pop(0)
+                k = k - 1
+            if p.age < 12:
+                continue
+
+        if ARGS.check_95 and code in [4, 5, 6, 7, 10, 11] and p.age >= 95:
+            k = len(age_people[sex][age]) + 1
+            while p.age >= 95 and k > 0:
+                age_people[sex][age].append(p)
+                p = age_people[sex][age].pop(0)
+                k = k - 1
+            if p.age >= 95:
+                continue
+
         f.master = p
         done = True
         if f.code == 0:
@@ -443,6 +468,7 @@ def initial_step (population):
             done = True
         if not done:
             print("error!:", f.code, f.num, f.children, f.parents, len(sum(age_people[0], [])), len(sum(age_people[1], [])))
+            sys.exit(1)
 
     return people, families
 
@@ -460,6 +486,77 @@ def unserialize_family(f, s):
     f.others = [p for m, p in s[i:i+len(f.others)]]
     i += len(f.others)
 
+
+def check_family_cond(master, attr, member):
+    if attr == 'C':
+        if master.age <= member.age:
+            return False
+    if attr == 'P':
+        if master.age >= member.age:
+            return False
+    if attr == 'S':
+        if member.age < 16:
+            return False
+    return True
+
+
+def check_family_cond_full(serialized_family):
+    f = serialized_family
+    m = f[0][1]
+    for attr, member in serialized_family:
+        if not check_family_cond(m, attr, member):
+            return False
+    return True
+
+
+def enforce_family_cond(families):
+    fnc = []
+    fc = []
+    for i, f in enumerate(families):
+        sf = serialize_family(f)
+        if check_family_cond_full(sf):
+            fc.append([i, sf])
+        else:
+            fnc.append([i, sf])
+
+    while fnc:
+        i1 = 0
+        s1 = fnc[i1][1]
+        j1 = 0
+        for j1 in range(1, len(s1)):
+            if not check_family_cond(s1[0][1], s1[j1][0], s1[j1][1]):
+                break
+        done = False
+        i2 = 0
+        for i2 in range(1, len(fnc) + len(fc)):
+            s2 = fnc[i2][1] if i2 < len(fnc) else fc[i2 - len(fnc)][1]
+            if len(s2) == 1:
+                continue
+            for j2 in range(1, len(s2)):
+                j2 = random.randrange(1, len(s2))
+                if s1[j1][1].sex != s2[j2][1].sex:
+                    continue
+                if not check_family_cond(s1[0][1], s1[j1][0], s2[j2][1]):
+                    continue
+                if not check_family_cond(s2[0][1], s2[j2][0], s1[j1][1]):
+                    continue
+                s1[j1][1], s2[j2][1] = s2[j2][1], s1[j1][1]
+                if i2 < len(fnc) and check_family_cond_full(s2):
+                    fc.append(fnc.pop(i2))
+                if check_family_cond_full(s1):
+                    fc.append(fnc.pop(0))
+                done = True
+                break
+            if done:
+                break
+        if not done:
+            raise ValueError("failed: enforce_family_cond.")
+
+    for i, sf in fc:
+        unserialize_family(families[i], sf)
+    return families
+
+
 def anealing_neighbor(families):
     r = [f for f in families]
     while True:
@@ -471,38 +568,23 @@ def anealing_neighbor(families):
         f2 = r[i2].clone()
         if f1.num == 1 or f2.num == 1:
             continue
-        j1 = 1 + random.randrange(f1.num - 1)
-        j2 = 1 + random.randrange(f2.num - 1)
+        j1 = random.randrange(1, f1.num)
+        j2 = random.randrange(1, f2.num)
         s1 = serialize_family(f1)
         s2 = serialize_family(f2)
-        if s1[j1][1].sex == s2[j2][1].sex:
-            if ARGS.swap_hack:
-                if s1[j1][0] == 'C':
-                    if f1.master.age <= s2[j2][1].age:
-                        continue
-                if s1[j1][0] == 'P':
-                    if f1.master.age >= s2[j2][1].age:
-                        continue
-                if s1[j1][0] == 'S':
-                    if s2[j2][1].age < 16:
-                        continue
-                if s2[j2][0] == 'C':
-                    if f2.master.age <= s1[j1][1].age:
-                        continue
-                if s2[j2][0] == 'P':
-                    if f2.master.age >= s1[j1][1].age:
-                        continue
-                if s2[j2][0] == 'S':
-                    if s1[j1][1].age < 16:
-                        continue
-            s1[j1][1], s2[j2][1] = s2[j2][1], s1[j1][1]
-            unserialize_family(f1, s1)
-            unserialize_family(f2, s2)
-            r[i1] = f1
-            r[i2] = f2
-            break
-        else:
+        if s1[j1][1].sex != s2[j2][1].sex:
             continue
+        if ARGS.swap_hack:
+            if not check_family_cond(f1.master, s1[j1][0], s2[j2][1]):
+                continue
+            if not check_family_cond(f2.master, s2[j2][0], s1[j1][1]):
+                continue
+        s1[j1][1], s2[j2][1] = s2[j2][1], s1[j1][1]
+        unserialize_family(f1, s1)
+        unserialize_family(f2, s2)
+        r[i1] = f1
+        r[i2] = f2
+        break
     return r
 
 
@@ -679,8 +761,18 @@ if __name__ == '__main__':
     initialize_B11(os.path.join(ARGS.data_dir, B11_01_NAME),
                    os.path.join(ARGS.data_dir, B11_02_NAME))
 
-    people, families = initial_step(ARGS.population)
-    print("done initial step.")
+    while True:
+        people, families = initial_step(ARGS.population)
+        print("done initial step.")
+        if not ARGS.family_cond_hack:
+            break
+        try: 
+            families = enforce_family_cond(families)
+            print("enforced family cond.")
+            break
+        except ValueError:
+            print("Failed: enforce_family_cond. Retrying...")
+
     families, _ = simulated_anealing(families, ARGS.t0, ARGS.alpha,
                                      ARGS.beta, ARGS.m, ARGS.max_time)
     output_population(ARGS.output, people, families)

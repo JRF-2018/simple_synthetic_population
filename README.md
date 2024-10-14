@@ -1,6 +1,6 @@
 # 仮想合成人口個票の簡易な実装
 
-<!-- Time-stamp: "2024-09-17T04:18:11Z" -->
+<!-- Time-stamp: "2024-10-14T11:03:27Z" -->
 
 ## このプロジェクトについて
 
@@ -95,6 +95,7 @@ $ python synthesize_population.py --population=1000 \
 311 700
 447 1000
 done initial step.
+enforced family cond.
 100 11.2958025624846 14.615401603987305
 200 11.2958025624846 16.919701208682675
 300 11.2958025624846 18.127250091602583
@@ -122,7 +123,12 @@ ARGS.swap_hack = True   # True: 近傍を求めるとき親と子の年齢をチ
                         # False: 近傍を求めるとき乱数に頼る。
 ARGS.reproduct_hack = False # True: 初期生成時に子や親の年齢書き換えを許す。
                             # False: 許さない。
-
+ARGS.family_cond_hack = True # True: 初期に家族条件を強制。
+                             # False: 強制しない。
+ARGS.check_12 = True    # True: 子のいる世帯主は12歳以上にする。
+                        # False: しない。
+ARGS.check_95 = True    # True: 親のいる世帯主は95歳未満にする。
+                        # False: しない。
 
 ## test_age_diff.py の結果
 ARGS.fa_c_mean = 32.757869148885014 # 父子年齢差
@@ -141,7 +147,7 @@ ARGS.m_f_std = 4.110029017891528
 
 ```python
 $ python synthesize_population.py --population=1000 \
-         --max-time=200000 \
+         --max-time=300000 \
          --output=population-1000.csv
 ```
 
@@ -165,7 +171,7 @@ https://www.hpc.cmc.osaka-u.ac.jp/wp-content/uploads/2019/12/2018_harada.pdf
 
   * Step 1: 仮想個票内の二世帯をランダムに選択。世帯主以外の人員をランダムに一人ずつ選ぶ。
 
-  * Step 2: 性別が等しくなかったり、親や子や配偶者の年齢として矛盾がある場合は Step 1 に戻り、矛盾がなければ、両者を入れ換える。
+  * Step 2: 性別が等しくなかったり、最低限の家族条件に矛盾がある場合は Step 1 に戻り、矛盾がなければ、両者を入れ換える。
 
   * Step 3: 仮想個票と統計表との差からスコアを作る。
 
@@ -188,6 +194,8 @@ https://jetbead.hatenablog.com/entry/20111014/1318598381
 
 上の Step 2 の工夫がないとまともなデータ生成ができませんでした。Step 2 が本実験のキモとなる工夫になるかと思います。Gemini さんに言わせると「このアプローチは、ドメイン知識をアルゴリズムに組み込むことで、より効率的かつ効果的な探索を実現した好例と言える」とのこと。(ちなみにプログラム作成時にはネットの情報の他、Gemini さんに大変お世話になりました。)
 
+なお、最低限の家族条件とは、詳しく書くと、親の場合は世帯主より年齢が上、子の場合は世帯主より年齢が下、世帯主の配偶者は 16歳以上…となっています。
+
 
 初期データの生成もおそらく上の論文とは違うところです。私の手法では、まず性別別年齢別の人口を先に生成してしまい、その後、世帯主の性別と年齢が合うように世帯をランダムに生成していきます。
 
@@ -199,7 +207,11 @@ https://jetbead.hatenablog.com/entry/20111014/1318598381
 
   * Step 4: 子供とその他の人員を割り当てる。子供はできるだけ年齢に矛盾がないように割り当てる。
 
-なお、Step 3 と Step 4 で割り当てに失敗したとき Step 1 の個人のデータの年齢を無理矢理に書き換えてツジツマをあわせるための --reproduct-hack というオプションも一時作ったのですが、使わなくても大丈夫そうです。逆に --reproduct-hack を使えば初期データのみ(焼きなまし法なし)でもそれなりのデータができあがります。シミュレーションによってはそれで十分でしょう。
+  * Step 5: 最低限の家族条件を強制するため、条件に合わない家族は、世帯主以外の家族の人員を他の家族の人員と共に条件に合うよう入れ換える。ただし、Step 5 は運悪く失敗することがあり、失敗すると Step 1 からやり直す。
+
+なお、Step 3 と Step 4 で割り当てに失敗したとき Step 1 の個人のデータの年齢を無理矢理に書き換えてツジツマをあわせるための --reproduct-hack というオプションも一時作ったのですが、Step 5 があるため、使わなくても大丈夫です。Step 5 があるため焼きなまし法をしなくても、それなりのデータができあがります。シミュレーションによってはそれで十分でしょう。
+
+Step 2 では、親のいる世帯主は95歳未満とし、子のいる世帯主は12歳以上にする…という処理もしています。子のいる世帯主の制限はいいとして、親のいる世帯主の制限が95歳というのはキツ過ぎると感じる方もいるかもしれません。世帯主100歳親116歳とかもありそうだからです。しかし、使っている統計の性質上世帯主の85歳以上にグラデーションがなく、その年齢層はシミュレーションにおける「限られた資源」としての性格を持っていて、いくぶんキツめに制限したほうが、最適化で良い結果が得られやすいだろうと考えました。
 
 
 ## おわりに
@@ -214,15 +226,8 @@ JRF ( http://jrf.cocolog-nifty.com/statuses , Twitter (X): @jion_rockford )
 
 ## License
 
-The author is a Japanese.
+MIT License.
 
-I intended this program and data to be public-domain, but you can
-treat this program under the (new) BSD-License or under the MIT
-License or under the Artistic License, if it is convenient for you.
-
-Within three months after the release of this program, I especially
-admit responsibility of efforts for rational requests of correction to
-this program.
 
 ----
 (This document is mainly written in Japanese/UTF8.)
